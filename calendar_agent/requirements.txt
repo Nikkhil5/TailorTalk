@@ -1,0 +1,9 @@
+streamlit
+fastapi
+uvicorn
+google-api-python-client
+google-auth
+python-dotenv
+pytz
+dateparser
+python-base64
