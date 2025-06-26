@@ -70,6 +70,31 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     }
 
 def suggest_alternative(slots: dict) -> str:
+    """Suggest business-appropriate alternative times"""
+    try:
+        from datetime import datetime, timedelta
+        start_dt = datetime.fromisoformat(slots["start"])
+        business_start = 9  # 9 AM
+        business_end = 18   # 6 PM
+
+        # If outside business hours, suggest next-day business slots
+        if start_dt.hour < business_start or start_dt.hour >= business_end:
+            next_day = start_dt + timedelta(days=1)
+            morning_slot = next_day.replace(hour=10, minute=0)
+            afternoon_slot = next_day.replace(hour=14, minute=0)
+            return f"{morning_slot.strftime('%A at %I:%M %p')} or {afternoon_slot.strftime('%I:%M %p')}"
+
+        # Within business hours - ensure suggestions stay in business hours
+        alt1_hour = max(min(start_dt.hour + 1, business_end - 1), business_start)
+        alt2_hour = max(min(start_dt.hour + 3, business_end - 1), business_start)
+        
+        alt1 = start_dt.replace(hour=alt1_hour, minute=0)
+        alt2 = start_dt.replace(hour=alt2_hour, minute=0)
+        
+        return f"{alt1.strftime('%I:%M %p')} or {alt2.strftime('%I:%M %p')}"
+        
+    except Exception:
+        return "10:00 AM or 2:00 PM tomorrow"
     """
     Suggest business-appropriate alternative times.
     Returns a human-readable string like "03:00 PM or 04:00 PM".
