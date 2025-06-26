@@ -34,44 +34,45 @@ def get_service_and_calendar_id():
         logger.error(f"Service authentication failed: {str(e)}")
         raise
 
+# In gcal.py, ensure proper timezone handling
 def check_availability(slots: dict) -> bool:
-    """
-    Check availability using Google Calendar FreeBusy API.
-    Args:
-        slots: dict with 'start', 'end', and optionally 'timezone'
-    Returns:
-        True if the slot is free, False otherwise.
-    """
+    """Check availability with proper timezone handling"""
     logger.info(f"Checking availability: {slots}")
-
+    
     if not slots or 'start' not in slots or 'end' not in slots:
         logger.error("Invalid slots format")
         return False
-
+    
     try:
         service, calendar_id = get_service_and_calendar_id()
-        # Convert to UTC for Google Calendar API
+        
+        # Parse datetime with timezone awareness
         start_dt = datetime.fromisoformat(slots['start'])
         end_dt = datetime.fromisoformat(slots['end'])
+        
+        # Convert to UTC for API call, but preserve timezone info
+        if start_dt.tzinfo is None:
+            user_tz = pytz.timezone(slots.get('timezone', 'Asia/Kolkata'))
+            start_dt = user_tz.localize(start_dt)
+            end_dt = user_tz.localize(end_dt)
+        
         start_utc = start_dt.astimezone(pytz.UTC).isoformat()
         end_utc = end_dt.astimezone(pytz.UTC).isoformat()
-
+        
         body = {
             "timeMin": start_utc,
             "timeMax": end_utc,
             "items": [{"id": calendar_id}]
         }
-
+        
         response = service.freebusy().query(body=body).execute()
         busy_times = response['calendars'][calendar_id].get('busy', [])
-        logger.info(f"Busy times: {busy_times}")
-
+        
         return len(busy_times) == 0
-    except HttpError as e:
-        logger.error(f"Google API error: {e}")
     except Exception as e:
         logger.error(f"Availability check failed: {str(e)}")
-    return False
+        return False
+
 
 def book_appointment(slots: dict) -> bool:
     """
