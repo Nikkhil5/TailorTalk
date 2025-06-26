@@ -1,8 +1,10 @@
-streamlit
 fastapi
 uvicorn
+streamlit
+langgraph
 google-api-python-client
-google-auth
+google-auth-oauthlib
+python-dateutil
 python-dotenv
 pytz
 dateparser
