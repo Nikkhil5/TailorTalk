@@ -3,8 +3,9 @@ uvicorn
 streamlit
 langgraph
 google-api-python-client
-google-auth-oauthlib
+google-auth
 python-dateutil
 python-dotenv
 pytz
 dateparser
+requests

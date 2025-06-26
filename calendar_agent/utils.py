@@ -13,10 +13,7 @@ def get_user_intent(text: str) -> str:
     return "unknown"
 
 def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
-    """
-    Extract time/date slots with business-hour defaults.
-    Ensures day-only queries default to 10:00 AM.
-    """
+    """Extract time/date slots with business-hour defaults."""
     user_tz = pytz.timezone(timezone)
     text_lower = text.lower()
 
@@ -37,7 +34,7 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     # Force business hours for day-only queries
     if not any(marker in text_lower for marker in ["am", "pm", ":", "hour", "minute"]):
         if "today" in text_lower or "tomorrow" in text_lower or \
-           any(day in text_lower for day in ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]):
+           any(day in text_lower for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]):
             text += " 10:00 AM"
 
     # Parse with dateparser
@@ -60,9 +57,9 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     if minutes_match:
         duration = int(minutes_match.group(1))
 
-    # Build slot dict
     start = parsed.astimezone(user_tz)
     end = start + timedelta(minutes=duration)
+
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
@@ -70,30 +67,27 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     }
 
 def suggest_alternative(slots: dict) -> str:
-    """
-    Suggest business-appropriate alternative times.
-    Never suggests times before 9 AM or after 6 PM.
-    """
+    """Suggest business-appropriate alternative times."""
     try:
         start_dt = datetime.fromisoformat(slots["start"])
-        business_start = 9  # 9 AM
-        business_end = 18   # 6 PM
+        business_start = 9   # 9 AM
+        business_end = 18    # 6 PM
 
-        # Handle midnight and non-business hours
+        # If outside business hours, suggest next day 10 AM or 2 PM
         if start_dt.hour < business_start or start_dt.hour >= business_end:
             next_day = start_dt + timedelta(days=1)
-            opt1 = next_day.replace(hour=10, minute=0)  # 10 AM
-            opt2 = next_day.replace(hour=14, minute=0)  # 2 PM
-            return f"{opt1.strftime('%A at %I:%M %p')} or {opt2.strftime('%I:%M %p')}"
+            opt1 = next_day.replace(hour=10, minute=0)
+            opt2 = next_day.replace(hour=14, minute=0)
+        else:
+            # Within business hours – suggest +1h and +2h
+            alt1_hour = min(start_dt.hour + 1, business_end - 1)
+            alt2_hour = min(start_dt.hour + 2, business_end - 1)
+            opt1 = start_dt.replace(hour=alt1_hour, minute=0)
+            opt2 = start_dt.replace(hour=alt2_hour, minute=0)
 
-        # Within business hours - suggest +1h and +2h
-        alt1_hour = min(start_dt.hour + 1, business_end - 1)
-        alt2_hour = min(start_dt.hour + 2, business_end - 1)
-        alt1 = start_dt.replace(hour=alt1_hour, minute=0)
-        alt2 = start_dt.replace(hour=alt2_hour, minute=0)
-        
-        return f"{alt1.strftime('%I:%M %p')} or {alt2.strftime('%I:%M %p')}"
-    except Exception:
+        return f"{opt1.strftime('%A at %I:%M %p')} or {opt2.strftime('%I:%M %p')}"
+    except Exception as e:
+        print("[suggest_alternative] error:", e)
         return "10:00 AM or 2:00 PM tomorrow"
 
 def _format_time_friendly(datetime_str: str) -> str:
