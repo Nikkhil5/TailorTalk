@@ -7,7 +7,7 @@ from utils import (
     suggest_alternative,
     _format_time_friendly
 )
-print("Loading calendar agent...")
+
 class AgentState(TypedDict):
     user_input: str
     intent: str
@@ -18,7 +18,7 @@ class AgentState(TypedDict):
     waiting_for: str
 
 def recognize_intent(state: AgentState) -> AgentState:
-    """Determine user intent, respecting multi-turn context."""
+    """Determine user intent with context awareness."""
     if state.get("completed"):
         return state
 
@@ -27,27 +27,26 @@ def recognize_intent(state: AgentState) -> AgentState:
     elif state.get("waiting_for") == "booking_time":
         state["intent"] = "book"
     elif state.get("waiting_for") == "confirmation":
-        state["intent"] = "book"  # Treat confirmation as booking intent
+        state["intent"] = "book"
     else:
         state["intent"] = get_user_intent(state["user_input"])
     return state
 
 def handle_booking(state: AgentState) -> AgentState:
-    """Route to availability or booking handlers based on intent."""
+    """Main booking handler with confirmation flow."""
     if state.get("completed"):
         return state
 
     state.setdefault("context", {})
 
-    # Handle confirmation responses first
+    # Handle confirmation responses
     if state.get("waiting_for") == "confirmation":
         if state["user_input"].strip().lower() in ["yes", "y"]:
-            # Book the pending appointment
             book_appointment(state["context"]["pending_booking"])
-            friendly = _format_time_friendly(state["context"]["pending_booking"]["start"])
-            state["response"] = f"Your meeting has been booked for {friendly}."
+            booked_time = _format_time_friendly(state["context"]["pending_booking"]["start"])
+            state["response"] = f"Booked! Your meeting is scheduled for {booked_time}."
         else:
-            state["response"] = "Okay, let me know another time you'd like."
+            state["response"] = "Booking canceled. What time would you prefer?"
         _reset_state(state)
         return state
 
@@ -59,16 +58,16 @@ def handle_booking(state: AgentState) -> AgentState:
         state["response"] = "I can help book appointments or check availability. What would you like to do?"
         state["completed"] = True
     except Exception as e:
-        state["response"] = f"Error processing request: {e}"
+        state["response"] = f"Error: {str(e)}"
         state["completed"] = True
 
     return state
 
 def _handle_availability(state: AgentState) -> AgentState:
-    """Process availability checks with guided prompts."""
+    """Availability check with business-hour defaults."""
     if state.get("waiting_for") == "time_range":
-        combo = f"{state['context'].get('date', '')} {state['user_input']}"
-        slots = extract_slots(combo)
+        combined_input = f"{state['context'].get('date', '')} {state['user_input']}"
+        slots = extract_slots(combined_input)
     else:
         slots = extract_slots(state["user_input"])
         if not slots and any(day in state["user_input"].lower() for day in [
@@ -76,40 +75,39 @@ def _handle_availability(state: AgentState) -> AgentState:
         ]):
             state["context"]["date"] = state["user_input"]
             state["waiting_for"] = "time_range"
-            state["response"] = "What time would you prefer? (e.g., 'morning', 'afternoon' or '2 PM')"
+            state["response"] = "What time? (e.g., 'morning', 'afternoon' or '2 PM')"
             return state
 
     if not slots:
-        state["response"] = "Please specify a date and time (e.g., 'Friday morning' or 'Friday 2 PM')."
+        state["response"] = "Please specify a date and time (e.g., 'Friday 2 PM')."
         return state
 
     if check_availability(slots):
-        friendly = _format_time_friendly(slots["start"])
         # Store slot and ask for confirmation
         state["context"]["pending_booking"] = slots
         state["waiting_for"] = "confirmation"
-        state["response"] = f"You're free on {friendly}. Would you like to book this slot? (yes/no)"
+        friendly = _format_time_friendly(slots["start"])
+        state["response"] = f"You're free on {friendly}. Book it? (yes/no)"
     else:
+        # Suggest business-hour alternatives
         alt = suggest_alternative(slots)
-        # Stay in time_range context for follow-up
         state["waiting_for"] = "time_range"
-        state["response"] = f"That time is unavailable. How about {alt}?"
-        # Keep context for next input
-        state["completed"] = False
+        state["response"] = f"Unavailable. Try: {alt}"
+        state["completed"] = False  # Stay in conversation
 
     return state
 
 def _handle_booking_request(state: AgentState) -> AgentState:
-    """Process booking requests, asking for time if needed."""
+    """Booking handler with confirmation."""
     if state.get("waiting_for") == "booking_time":
-        combo = f"{state['context'].get('booking_request', '')} {state['user_input']}"
-        slots = extract_slots(combo)
+        combined_input = f"{state['context'].get('booking_request', '')} {state['user_input']}"
+        slots = extract_slots(combined_input)
     else:
         slots = extract_slots(state["user_input"])
         if not slots and any(w in state["user_input"].lower() for w in ["book","schedule"]):
             state["context"]["booking_request"] = state["user_input"]
             state["waiting_for"] = "booking_time"
-            state["response"] = "When would you like to book? (e.g., 'Tomorrow 3PM')"
+            state["response"] = "When? (e.g., 'Tomorrow 3PM')"
             return state
 
     if not slots:
@@ -117,27 +115,26 @@ def _handle_booking_request(state: AgentState) -> AgentState:
         return state
 
     if check_availability(slots):
-        # Store slot and ask for confirmation
+        # Store slot and confirm
         state["context"]["pending_booking"] = slots
         state["waiting_for"] = "confirmation"
         friendly = _format_time_friendly(slots["start"])
-        state["response"] = f"The slot at {friendly} is available. Shall I book it? (yes/no)"
+        state["response"] = f"Available at {friendly}. Book it? (yes/no)"
     else:
         alt = suggest_alternative(slots)
-        # Stay in booking_time context for follow-up
         state["waiting_for"] = "booking_time"
-        state["response"] = f"That time is unavailable. Try: {alt}"
-        state["completed"] = False
+        state["response"] = f"Unavailable. Try: {alt}"
+        state["completed"] = False  # Stay in conversation
 
     return state
 
 def _reset_state(state: AgentState) -> None:
-    """Clean up state after a completed turn."""
+    """Reset conversation state after completion."""
     state["completed"] = True
     state["waiting_for"] = ""
     state["context"] = {}
 
-# Build the LangGraph workflow
+# Build LangGraph workflow
 workflow = StateGraph(AgentState)
 workflow.add_node("recognize_intent_node", recognize_intent)
 workflow.add_node("handle_booking_node", handle_booking)
@@ -147,7 +144,7 @@ workflow.add_edge("handle_booking_node", END)
 graph = workflow.compile()
 
 def run_agent(user_input: str, state: dict) -> dict:
-    """Invoke the workflow with the current user input and state."""
+    """Run agent workflow with state preservation."""
     if not state:
         state = {
             "user_input": user_input,
@@ -159,14 +156,12 @@ def run_agent(user_input: str, state: dict) -> dict:
             "waiting_for": ""
         }
     else:
-        # Only reset user input, keep context
         state["user_input"] = user_input
-        # Only mark as not completed if we're not in a waiting state
         if not state.get("waiting_for"):
             state["completed"] = False
 
-    updated = graph.invoke(state)
+    updated_state = graph.invoke(state)
     return {
-        "response": updated["response"],
-        "state": updated
+        "response": updated_state["response"],
+        "state": updated_state
     }
