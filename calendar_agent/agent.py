@@ -26,6 +26,8 @@ def recognize_intent(state: AgentState) -> AgentState:
         state["intent"] = "check_availability"
     elif state.get("waiting_for") == "booking_time":
         state["intent"] = "book"
+    elif state.get("waiting_for") == "confirmation":
+        state["intent"] = "book"  # Treat confirmation as booking intent
     else:
         state["intent"] = get_user_intent(state["user_input"])
     return state
@@ -36,6 +38,18 @@ def handle_booking(state: AgentState) -> AgentState:
         return state
 
     state.setdefault("context", {})
+
+    # Handle confirmation responses first
+    if state.get("waiting_for") == "confirmation":
+        if state["user_input"].strip().lower() in ["yes", "y"]:
+            # Book the pending appointment
+            book_appointment(state["context"]["pending_booking"])
+            friendly = _format_time_friendly(state["context"]["pending_booking"]["start"])
+            state["response"] = f"Your meeting has been booked for {friendly}."
+        else:
+            state["response"] = "Okay, let me know another time you'd like."
+        _reset_state(state)
+        return state
 
     try:
         if state["intent"] == "check_availability":
@@ -71,12 +85,18 @@ def _handle_availability(state: AgentState) -> AgentState:
 
     if check_availability(slots):
         friendly = _format_time_friendly(slots["start"])
-        state["response"] = f"You're free on {friendly}. Would you like to book this slot?"
+        # Store slot and ask for confirmation
+        state["context"]["pending_booking"] = slots
+        state["waiting_for"] = "confirmation"
+        state["response"] = f"You're free on {friendly}. Would you like to book this slot? (yes/no)"
     else:
         alt = suggest_alternative(slots)
+        # Stay in time_range context for follow-up
+        state["waiting_for"] = "time_range"
         state["response"] = f"That time is unavailable. How about {alt}?"
+        # Keep context for next input
+        state["completed"] = False
 
-    _reset_state(state)
     return state
 
 def _handle_booking_request(state: AgentState) -> AgentState:
@@ -97,14 +117,18 @@ def _handle_booking_request(state: AgentState) -> AgentState:
         return state
 
     if check_availability(slots):
-        book_appointment(slots)
+        # Store slot and ask for confirmation
+        state["context"]["pending_booking"] = slots
+        state["waiting_for"] = "confirmation"
         friendly = _format_time_friendly(slots["start"])
-        state["response"] = f"Your meeting has been booked for {friendly}."
+        state["response"] = f"The slot at {friendly} is available. Shall I book it? (yes/no)"
     else:
         alt = suggest_alternative(slots)
+        # Stay in booking_time context for follow-up
+        state["waiting_for"] = "booking_time"
         state["response"] = f"That time is unavailable. Try: {alt}"
+        state["completed"] = False
 
-    _reset_state(state)
     return state
 
 def _reset_state(state: AgentState) -> None:
@@ -135,8 +159,11 @@ def run_agent(user_input: str, state: dict) -> dict:
             "waiting_for": ""
         }
     else:
+        # Only reset user input, keep context
         state["user_input"] = user_input
-        state["completed"] = False
+        # Only mark as not completed if we're not in a waiting state
+        if not state.get("waiting_for"):
+            state["completed"] = False
 
     updated = graph.invoke(state)
     return {
