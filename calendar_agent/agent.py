@@ -7,7 +7,7 @@ from utils import (
     suggest_alternative,
     _format_time_friendly
 )
-
+print("Loading calendar agent...")
 class AgentState(TypedDict):
     user_input: str
     intent: str
