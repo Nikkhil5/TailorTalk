@@ -118,35 +118,33 @@ def _handle_confirmation(state: AgentState) -> AgentState:
     return state
 
 def _handle_time_range(state: AgentState) -> AgentState:
-    """Process time inputs with smart retry logic"""
-    # Handle "same time" references
+    # 1. Check if user is selecting a suggested alternative
+    if state.get("last_suggested_alternatives"):
+        user_input_clean = re.sub(r'[\s:-]', '', state["user_input"].lower())
+        for alt in state["last_suggested_alternatives"]:
+            alt_clean = re.sub(r'[\s:-]', '', alt.lower())
+            if user_input_clean == alt_clean or user_input_clean in alt_clean:
+                slots = extract_slots(alt)
+                if slots:
+                    return _process_slots(state, slots)
+    
+    # 2. Handle "same time" references
     if "same time" in state["user_input"].lower() and state.get("last_booked"):
         slots = state["last_booked"].copy()
-        # Adjust date to new reference
         if "tomorrow" in state["user_input"].lower():
             new_date = datetime.datetime.now() + datetime.timedelta(days=1)
             slots["start"] = slots["start"].replace(day=new_date.day, month=new_date.month, year=new_date.year)
         return _process_slots(state, slots)
     
-    # Check if user selected a suggested alternative
-    if state.get("last_suggested_alternatives"):
-        for alt in state["last_suggested_alternatives"]:
-            if alt.lower() in state["user_input"].lower():
-                # User selected a predefined alternative
-                slots = extract_slots(alt)
-                if slots:
-                    return _process_slots(state, slots)
-    
-    # Combine with pending date if available
+    # 3. Combine with pending date if available
     combined_input = state["user_input"]
     if state.get("pending_date"):
         combined_input = f"{state['pending_date']} {state['user_input']}"
-        state["pending_date"] = None  # Clear after use
+        state["pending_date"] = None
     
     slots = extract_slots(combined_input)
     
     if not slots:
-        # Provide specific guidance for failed parsing
         state["response"] = (
             "I couldn't understand that time. Please try:\n"
             "- 'Tomorrow 3 PM'\n"
@@ -156,6 +154,7 @@ def _handle_time_range(state: AgentState) -> AgentState:
         return state
         
     return _process_slots(state, slots)
+
 
 def _handle_availability(state: AgentState) -> AgentState:
     """Availability check with intelligent defaults"""
@@ -179,15 +178,20 @@ def _handle_booking_request(state: AgentState) -> AgentState:
     return _process_slots(state, slots) if slots else _request_better_input(state)
 
 def _process_slots(state: AgentState, slots: dict) -> AgentState:
-    """Central slot processing with intelligent responses"""
+    """Central slot processing with intelligent responses and date context"""
+    # Helper to get current date context
+    def get_date_context():
+        return state.get("pending_date") or state.get("context", {}).get("date", "")
+    
     # Check business hours
     if not is_business_hours(slots):
         alt = suggest_alternative(slots)
-        state["response"] = f"⏰ That time is outside business hours. How about {alt}?"
-        state["waiting_for"] = "time_range"
+        date_ctx = get_date_context()
+        full_alt = f"{date_ctx} at {alt}" if date_ctx else alt
         
-        # Store suggested alternatives for reference
-        state["last_suggested_alternatives"] = [alt]
+        state["response"] = f"⏰ That time is outside business hours. How about {full_alt}?"
+        state["waiting_for"] = "time_range"
+        state["last_suggested_alternatives"] = [full_alt]
         return state
         
     if check_availability(slots):
@@ -198,11 +202,12 @@ def _process_slots(state: AgentState, slots: dict) -> AgentState:
         state["context"]["confirmation_prompt"] = state["response"]
     else:
         alt = suggest_alternative(slots)
-        state["waiting_for"] = "time_range"
-        state["response"] = f"⏰ Unavailable at that time. How about {alt}?"
+        date_ctx = get_date_context()
+        full_alt = f"{date_ctx} at {alt}" if date_ctx else alt
         
-        # Store suggested alternatives for reference
-        state["last_suggested_alternatives"] = [alt]
+        state["waiting_for"] = "time_range"
+        state["response"] = f"⏰ Unavailable at that time. How about {full_alt}?"
+        state["last_suggested_alternatives"] = [full_alt]
     
     return state
 
