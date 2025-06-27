@@ -40,7 +40,7 @@ if "messages" not in st.session_state:
                    "💡 **Tip**: Always include date AND time in your requests like:\n"
                    "   - 'Friday 2 PM'\n"
                    "   - 'Tomorrow morning'\n"
-                   "   - 'Next week Tuesday at 3 PM'"
+                   "   - 'Tomorrow at afternoon at 2 PM'"
     }]
     st.session_state.agent_state = {}
 
