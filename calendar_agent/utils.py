@@ -18,10 +18,12 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     text_lower = text.lower().strip()
     
     # Step 1: Clean text while preserving critical structure
-    clean_text = re.sub(
-        r'\b(?:yes|please|book|schedule|appointment|meeting|call|wanna|want to|can you|for)\b', 
-        '', text_lower, flags=re.IGNORECASE
-    )
+    # Normalize natural time phrases
+    clean_text = re.sub(r'next week (monday|tuesday|wednesday|thursday|friday|saturday|sunday)', 
+                    r'\1 next week', clean_text, flags=re.IGNORECASE)
+
+    clean_text = re.sub(r'on (\w+day) next week', r'\1 next week', clean_text, flags=re.IGNORECASE)
+
     clean_text = clean_text.strip()
     
     # Preserve critical prepositions
