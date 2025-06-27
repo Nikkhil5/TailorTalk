@@ -147,7 +147,7 @@ def _handle_availability(state: AgentState) -> AgentState:
     if "tomorrow" in state["user_input"].lower() and not re.search(r'\d', state["user_input"]):
         state["context"]["date"] = "tomorrow"
         state["waiting_for"] = "time_range"
-        state["response"] = "What time tomorrow? (e.g., 'morning', 'afternoon' or '2 PM')"
+        state["response"] = "What time tomorrow? (e.g., 'tomorrow morning at 10:00 AM', 'tomorrow afternoon at 2:00 PM' or 'tomorrow evening at 7:00 PM')"
         return state
         
     slots = extract_slots(state["user_input"])
