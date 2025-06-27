@@ -125,9 +125,18 @@ def _handle_time_range(state: AgentState) -> AgentState:
         state["pending_date"] = None
 
     slots = extract_slots(combined_input)
+
+    if not slots:
+        for msg in reversed(state.get("conversation_history", [])):
+            if "next" in msg.lower() or "week" in msg.lower() or "friday" in msg.lower():
+                retry_input = f"{msg} {state['user_input']}"
+                slots = extract_slots(retry_input)
+                if slots:
+                    break
+
     if not slots:
         state["response"] = (
-            "I couldn’t understand that time.\n\n**Try one of these:**\n"
+            "I couldn’t understand that time. Please try one of these:\n"
             "• 'Tomorrow at 2 PM'\n"
             "• 'Friday 11 AM'\n"
             "• 'Next week Tuesday at 3:30 PM'"
@@ -260,5 +269,6 @@ def run_agent(user_input: str, state: dict) -> dict:
     updated_state = graph.invoke(state)
     return {
         "response": updated_state["response"],
+        
         "state": updated_state
     }
