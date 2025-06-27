@@ -21,6 +21,7 @@ class AgentState(TypedDict):
     waiting_for: str
     last_booked: dict
     conversation_history: list
+    pending_date: str
 
 def recognize_intent(state: AgentState) -> AgentState:
     """Advanced intent recognition with context awareness"""
@@ -126,7 +127,12 @@ def _handle_time_range(state: AgentState) -> AgentState:
             slots["start"] = slots["start"].replace(day=new_date.day, month=new_date.month, year=new_date.year)
         return _process_slots(state, slots)
     
-    combined_input = f"{state['context'].get('date', '')} {state['user_input']}"
+    # Combine with pending date if available
+    combined_input = state["user_input"]
+    if state.get("pending_date"):
+        combined_input = f"{state['pending_date']} {state['user_input']}"
+        state["pending_date"] = None  # Clear after use
+    
     slots = extract_slots(combined_input)
     
     if not slots:
@@ -147,7 +153,7 @@ def _handle_availability(state: AgentState) -> AgentState:
     if "tomorrow" in state["user_input"].lower() and not re.search(r'\d', state["user_input"]):
         state["context"]["date"] = "tomorrow"
         state["waiting_for"] = "time_range"
-        state["response"] = "What time tomorrow? (e.g., 'tomorrow morning at 10:00 AM', 'tomorrow afternoon at 2:00 PM' or 'tomorrow evening at 7:00 PM')"
+        state["response"] = "What time tomorrow? (e.g., 'morning', 'afternoon' or '2 PM')"
         return state
         
     slots = extract_slots(state["user_input"])
@@ -188,8 +194,10 @@ def _request_better_input(state: AgentState) -> AgentState:
     """Intelligent input guidance based on conversation context"""
     if any(word in state["user_input"].lower() for word in ["time", "hour", "minute"]):
         state["response"] = "Please include a specific time (e.g., '2 PM' or 'morning')."
-    elif any(word in state["user_input"].lower() for word in ["date", "day", "tomorrow"]):
-        state["response"] = "Please include a specific date (e.g., 'Friday' or 'July 5th')."
+    elif any(word in state["user_input"].lower() for word in ["date", "day", "tomorrow", "next"]):
+        # Store date for future reference
+        state["pending_date"] = state["user_input"]
+        state["response"] = "Please include a time with that date (e.g., '10 AM')."
     else:
         state["response"] = (
             "Please include both date AND time in your request.\n\n"
@@ -237,7 +245,8 @@ def _reset_state(state: AgentState) -> None:
     state.update({
         "completed": True,
         "waiting_for": "",
-        "context": {}
+        "context": {},
+        "pending_date": None
     })
 
 # Build workflow
@@ -261,7 +270,8 @@ def run_agent(user_input: str, state: dict) -> dict:
             "context": {},
             "waiting_for": "",
             "last_booked": None,
-            "conversation_history": []
+            "conversation_history": [],
+            "pending_date": None
         }
     else:
         state["user_input"] = user_input
