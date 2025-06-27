@@ -5,10 +5,8 @@ from utils import (
     get_user_intent,
     extract_slots,
     suggest_alternative,
-    
+    _format_time_friendly
 )
-from utils import _format_time_friendly
-
 
 class AgentState(TypedDict):
     user_input: str

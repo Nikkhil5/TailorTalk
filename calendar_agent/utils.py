@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 import pytz
 
 def get_user_intent(text: str) -> str:
-    """Recognize user intent from text."""
     text = text.lower()
     if any(word in text for word in ["book", "schedule", "appointment", "meeting"]):
         return "book"
@@ -13,8 +12,13 @@ def get_user_intent(text: str) -> str:
     return "unknown"
 
 def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
-    """Extract time/date slots with business-hour defaults."""
+    import pytz
+    import re
+    from datetime import timedelta
+    import dateparser
+
     user_tz = pytz.timezone(timezone)
+    text = text.strip()
     text_lower = text.lower()
 
     # Map vague terms to business hours
@@ -26,23 +30,21 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
         "noon": "12:00 PM",
         "midnight": "12:00 AM"
     }
+    # Replace vague terms
     for term, tm in time_map.items():
         if term in text_lower:
             text = re.sub(term, tm, text, flags=re.IGNORECASE)
+            text_lower = text.lower()  # Keep in sync
             break
 
-    # Force business hours for day-only queries
+    # If only a day/date is given, add default time
     if not any(marker in text_lower for marker in ["am", "pm", ":", "hour", "minute"]):
-        if "today" in text_lower or "tomorrow" in text_lower or \
-           any(day in text_lower for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]):
+        if any(day in text_lower for day in ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]) \
+           or "today" in text_lower or "tomorrow" in text_lower:
             text += " 10:00 AM"
+            text_lower = text.lower()
 
-    # Clean up common redundant phrasing
-    text = re.sub(r'\b(\w+day)\b.*\b\1\b', r'\1', text, flags=re.IGNORECASE)
-    text = re.sub(r'at\s*(\w+day)?\s*', '', text, flags=re.IGNORECASE)
-
-    print("[DEBUG] Extracting slots from cleaned text:", text)
-
+    # Parse
     parsed = dateparser.parse(
         text,
         settings={
@@ -52,9 +54,10 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
         }
     )
     if not parsed:
+        print("[DEBUG] Failed to parse:", text)
         return None
 
-    # Determine meeting duration
+    # Default duration
     duration = 30
     if "hour" in text_lower:
         duration = 60
@@ -65,14 +68,15 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     start = parsed.astimezone(user_tz)
     end = start + timedelta(minutes=duration)
 
+
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
         "timezone": timezone
     }
 
+
 def suggest_alternative(slots: dict) -> str:
-    """Suggest business-appropriate alternative times."""
     try:
         start_dt = datetime.fromisoformat(slots["start"])
         business_start = 9   # 9 AM
@@ -94,11 +98,9 @@ def suggest_alternative(slots: dict) -> str:
         return "10:00 AM or 2:00 PM tomorrow"
 
 def _format_time_friendly(datetime_str: str) -> str:
-    """Convert ISO datetime to user-friendly format."""
     try:
         dt = datetime.fromisoformat(datetime_str)
         return dt.strftime("%A, %B %d at %I:%M %p")
     except Exception:
         return datetime_str
-
 print(_format_time_friendly("2025-06-27T15:00:00+05:30"))

@@ -90,6 +90,7 @@ def book_appointment(slots: dict) -> bool:
 
     try:
         service, calendar_id = get_service_and_calendar_id()
+        print(f" {calendar_id} Service and calendar ID obtained successfully")
         event = {
             'summary': 'Booked Appointment',
             'start': {'dateTime': slots['start'], 'timeZone': 'UTC'},
