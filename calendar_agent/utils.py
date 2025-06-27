@@ -12,29 +12,23 @@ def get_user_intent(text: str) -> str:
     return "unknown"
 
 def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
+    """Robust slot extraction with enhanced parsing and error handling"""
     user_tz = pytz.timezone(timezone)
+    original_text = text
     text_lower = text.lower().strip()
     
-    # Handle "same time" references
-    if "same time" in text_lower:
-        return None
-    
-    # Clean text while preserving time/date info
+    # Step 1: Clean text while preserving critical structure
     clean_text = re.sub(
         r'\b(?:yes|please|book|schedule|appointment|meeting|call|wanna|want to|can you|for)\b', 
         '', text_lower, flags=re.IGNORECASE
     )
     clean_text = clean_text.strip()
     
-    # Convert 24-hour to 12-hour format
-    clean_text = re.sub(
-        r'(\d{1,2})[:]?(\d{2})\s*(hrs|hours|h)?', 
-        lambda m: f"{int(m.group(1)) % 12 or 12} { 'PM' if int(m.group(1)) >= 12 else 'AM' }", 
-        clean_text,
-        flags=re.IGNORECASE
-    )
+    # Preserve critical prepositions
+    clean_text = re.sub(r'\b(at|on|by)\b', ' ', clean_text)  # Remove prepositions
+    clean_text = re.sub(r'\s+', ' ', clean_text)  # Normalize spaces
     
-    # Map vague terms to business hours
+    # Step 2: Map vague terms to specific times
     time_map = {
         "morning": "10:00 AM",
         "afternoon": "2:00 PM",
@@ -48,33 +42,47 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
             clean_text = re.sub(term, tm, clean_text, flags=re.IGNORECASE)
             break
 
-    # Handle time formats like "3PM" -> "3 PM"
+    # Step 3: Handle time formats
     clean_text = re.sub(r'(\d+)([ap]m)', r'\1 \2', clean_text, flags=re.IGNORECASE)
+    clean_text = re.sub(r'(\d{1,2})[:]?(\d{2})', r'\1:\2', clean_text)  # Normalize 2:30 -> 2:30
     
-    # Add default date context for standalone times
-    if not any(term in clean_text for term in ["mon","tue","wed","thu","fri","sat","sun","today","tomorrow","week","month"]):
-        if re.search(r'\d{1,2}\s*(am|pm)', clean_text, re.IGNORECASE):
+    # Step 4: Add context for ambiguous inputs
+    if not any(word in clean_text for word in ["mon","tue","wed","thu","fri","sat","sun","today","tomorrow","week","month"]):
+        if re.search(r'\d{1,2}:\d{2}\s*(am|pm)', clean_text, re.IGNORECASE):
             clean_text = "today " + clean_text
-    # Add default time for date-only inputs
     elif not any(marker in clean_text for marker in ["am", "pm", ":", "hour", "minute"]):
         clean_text += " 10:00 AM"
 
-    # Parse with enhanced settings
-    parsed = dateparser.parse(
+    # Step 5: Multiple parse attempts
+    parsed = None
+    parse_attempts = [
         clean_text,
-        settings={
-            "TIMEZONE": timezone,
-            "RETURN_AS_TIMEZONE_AWARE": True,
-            "PREFER_DATES_FROM": "future",
-            "PREFER_DAY_OF_MONTH": "first",
-            "RELATIVE_BASE": datetime.now(pytz.timezone(timezone))
-        }
-    )
+        f"{clean_text} {datetime.now().year}",  # Add year context
+        original_text  # Fallback to original
+    ]
+    
+    for attempt in parse_attempts:
+        parsed = dateparser.parse(
+            attempt,
+            settings={
+                "TIMEZONE": timezone,
+                "RETURN_AS_TIMEZONE_AWARE": True,
+                "PREFER_DATES_FROM": "future",
+                "PREFER_DAY_OF_MONTH": "first",
+                "RELATIVE_BASE": datetime.now(pytz.timezone(timezone))
+            }
+        )
+        if parsed:
+            # Fix default year (1900 → current year)
+            if parsed.year == 1900:
+                parsed = parsed.replace(year=datetime.now().year)
+            break
     
     if not parsed:
+        print(f"[ERROR] Failed to parse: '{original_text}' → Attempts: {parse_attempts}")
         return None
 
-    # Duration handling
+    # Step 6: Duration handling
     duration = 30
     if "hour" in clean_text:
         hour_match = re.search(r'(\d+)\s*hour', clean_text)
@@ -83,7 +91,7 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     if minutes_match:
         duration = int(minutes_match.group(1))
 
-    # Timezone handling
+    # Step 7: Timezone handling
     if parsed.tzinfo is None:
         start = user_tz.localize(parsed)
     else:
@@ -91,11 +99,15 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
         
     end = start + timedelta(minutes=duration)
 
+    # Debug output
+    print(f"[SUCCESS] Parsed: '{original_text}' → {start.isoformat()}")
+    
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
         "timezone": timezone
     }
+
 
 def is_business_hours(slots: dict) -> bool:
     try:
@@ -136,4 +148,59 @@ def _format_time_friendly(datetime_str: str) -> str:
         return dt.strftime("%A, %B %d at %I:%M %p")
     except Exception:
         return datetime_str
-print(_format_time_friendly("2023-10-01T10:00:00+05:30"))  #
+print(_format_time_friendly("2023-10-01T10:00:00+05:30"))  
+def test_extract_slots():
+    test_cases = [
+        # Invalid inputs
+        ("asdfghjkl", None),
+        ("yesterday tomorrow", None),
+        ("last Monday at 2 PM", None),
+        
+        # Simple time inputs
+        ("3 PM", "today 15:00"),
+        ("10 AM", "today 10:00"),
+        ("1430", "today 14:30"),
+        
+        # Date + time combinations
+        ("Friday", "friday 10:00"),
+        ("Fri at 3:30 PM", "friday 15:30"),
+        ("Tomorrow 1430", "tomorrow 14:30"),
+        ("December 31 at 11:59 PM", "2025-12-31 23:59"),
+        
+        # Relative time expressions
+        ("next week tuesday at 10am", "tuesday 10:00"),
+        ("the day after tomorrow noon", "day after tomorrow 12:00"),
+        ("two weeks from next Tuesday at half past ten in the evening", "tuesday 22:30"),
+        
+        # Duration handling
+        ("2 hour meeting at 3 PM", "15:00-17:00"),
+        
+        # Multi-language support
+        ("mañana por la mañana", "tomorrow 10:00"),
+        
+        # Options handling
+        ("Monday 3 PM or 4 PM", "monday 15:00"),
+        
+        # Timezone handling
+        ("Thursday 3 PM GMT", "thursday 15:00 GMT")
+    ]
+    
+    for input_text, expected in test_cases:
+        result = extract_slots(input_text)
+        print(f"Input: '{input_text}'")
+        
+        if result:
+            parsed_time = _format_time_friendly(result["start"])
+            print(f"Parsed: {parsed_time}")
+            
+            # Special handling for duration cases
+            if "15:00-17:00" in expected:
+                start = datetime.fromisoformat(result["start"])
+                end = datetime.fromisoformat(result["end"])
+                duration = (end - start).seconds // 60
+                print(f"Duration: {duration} minutes")
+        else:
+            print("Result: None")
+        
+        print(f"Expected: {expected}")
+        print("-" * 50)
