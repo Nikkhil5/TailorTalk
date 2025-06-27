@@ -22,6 +22,7 @@ class AgentState(TypedDict):
     last_booked: dict
     conversation_history: list
     pending_date: str
+    last_suggested_alternatives: list
 
 def recognize_intent(state: AgentState) -> AgentState:
     """Advanced intent recognition with context awareness"""
@@ -127,6 +128,15 @@ def _handle_time_range(state: AgentState) -> AgentState:
             slots["start"] = slots["start"].replace(day=new_date.day, month=new_date.month, year=new_date.year)
         return _process_slots(state, slots)
     
+    # Check if user selected a suggested alternative
+    if state.get("last_suggested_alternatives"):
+        for alt in state["last_suggested_alternatives"]:
+            if alt.lower() in state["user_input"].lower():
+                # User selected a predefined alternative
+                slots = extract_slots(alt)
+                if slots:
+                    return _process_slots(state, slots)
+    
     # Combine with pending date if available
     combined_input = state["user_input"]
     if state.get("pending_date"):
@@ -175,6 +185,9 @@ def _process_slots(state: AgentState, slots: dict) -> AgentState:
         alt = suggest_alternative(slots)
         state["response"] = f"⏰ That time is outside business hours. How about {alt}?"
         state["waiting_for"] = "time_range"
+        
+        # Store suggested alternatives for reference
+        state["last_suggested_alternatives"] = [alt]
         return state
         
     if check_availability(slots):
@@ -187,6 +200,9 @@ def _process_slots(state: AgentState, slots: dict) -> AgentState:
         alt = suggest_alternative(slots)
         state["waiting_for"] = "time_range"
         state["response"] = f"⏰ Unavailable at that time. How about {alt}?"
+        
+        # Store suggested alternatives for reference
+        state["last_suggested_alternatives"] = [alt]
     
     return state
 
@@ -246,7 +262,8 @@ def _reset_state(state: AgentState) -> None:
         "completed": True,
         "waiting_for": "",
         "context": {},
-        "pending_date": None
+        "pending_date": None,
+        "last_suggested_alternatives": []
     })
 
 # Build workflow
@@ -271,7 +288,8 @@ def run_agent(user_input: str, state: dict) -> dict:
             "waiting_for": "",
             "last_booked": None,
             "conversation_history": [],
-            "pending_date": None
+            "pending_date": None,
+            "last_suggested_alternatives": []
         }
     else:
         state["user_input"] = user_input
