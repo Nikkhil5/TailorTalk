@@ -178,20 +178,13 @@ def _handle_booking_request(state: AgentState) -> AgentState:
     return _process_slots(state, slots) if slots else _request_better_input(state)
 
 def _process_slots(state: AgentState, slots: dict) -> AgentState:
-    """Central slot processing with intelligent responses and date context"""
-    # Helper to get current date context
-    def get_date_context():
-        return state.get("pending_date") or state.get("context", {}).get("date", "")
-    
+    """Central slot processing with intelligent responses"""
     # Check business hours
     if not is_business_hours(slots):
         alt = suggest_alternative(slots)
-        date_ctx = get_date_context()
-        full_alt = f"{date_ctx} at {alt}" if date_ctx else alt
-        
-        state["response"] = f"⏰ That time is outside business hours. How about {full_alt}?"
+        state["response"] = f"⏰ That time is outside business hours. How about {alt}?"
         state["waiting_for"] = "time_range"
-        state["last_suggested_alternatives"] = [full_alt]
+        state["last_suggested_alternatives"] = [alt]
         return state
         
     if check_availability(slots):
@@ -202,14 +195,12 @@ def _process_slots(state: AgentState, slots: dict) -> AgentState:
         state["context"]["confirmation_prompt"] = state["response"]
     else:
         alt = suggest_alternative(slots)
-        date_ctx = get_date_context()
-        full_alt = f"{date_ctx} at {alt}" if date_ctx else alt
-        
         state["waiting_for"] = "time_range"
-        state["response"] = f"⏰ Unavailable at that time. How about {full_alt}?"
-        state["last_suggested_alternatives"] = [full_alt]
+        state["response"] = f"⏰ Unavailable at that time. How about {alt}?"
+        state["last_suggested_alternatives"] = [alt]
     
     return state
+
 
 def _request_better_input(state: AgentState) -> AgentState:
     """Intelligent input guidance based on conversation context"""
@@ -252,14 +243,16 @@ def _handle_unknown_intent(state: AgentState) -> AgentState:
     state["completed"] = True
     return state
 
+
 def _handle_error(state: AgentState, error: Exception) -> AgentState:
-    """Graceful error recovery"""
     state["response"] = (
         "⚠️ I encountered an issue: " + str(error) + "\n\n"
         "Let's try again! Please rephrase your request."
     )
     _reset_state(state)
     return state
+
+print(_handle_error)
 
 def _reset_state(state: AgentState) -> None:
     """Complete state reset"""

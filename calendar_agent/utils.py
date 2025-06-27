@@ -105,21 +105,25 @@ def is_business_hours(slots: dict) -> bool:
         return True
 
 def suggest_alternative(slots: dict) -> str:
+    """Suggest business-appropriate alternatives with clean formatting"""
     try:
         start_dt = datetime.fromisoformat(slots["start"])
+        business_start = 9
+        business_end = 18
+
+        if start_dt.hour < business_start or start_dt.hour >= business_end:
+            # Outside business hours - suggest next day morning/afternoon
+            next_day = start_dt + timedelta(days=1)
+            return f"{next_day.strftime('%A')} morning or afternoon"
         
-        if is_business_hours(slots):
-            alt1 = start_dt + timedelta(hours=1)
-            alt2 = start_dt + timedelta(hours=2)
-            return f"{alt1.strftime('%I:%M %p')} or {alt2.strftime('%I:%M %p')}"
-        
-        next_day = start_dt + timedelta(days=1)
-        morning = next_day.replace(hour=10, minute=0)
-        afternoon = next_day.replace(hour=14, minute=0)
-        return f"{morning.strftime('%A at %I:%M %p')} or {afternoon.strftime('%I:%M %p')}"
-        
+        # Within business hours - suggest same day alternatives
+        alt1 = start_dt + timedelta(hours=1)
+        alt2 = start_dt + timedelta(hours=2)
+        return f"{alt1.strftime('%I:%M %p')} or {alt2.strftime('%I:%M %p')}"
+
     except Exception:
-        return "10:00 AM or 2:00 PM tomorrow"
+        return "tomorrow morning or afternoon"
+
 
 def _format_time_friendly(datetime_str: str) -> str:
     try:
@@ -132,4 +136,4 @@ def _format_time_friendly(datetime_str: str) -> str:
         return dt.strftime("%A, %B %d at %I:%M %p")
     except Exception:
         return datetime_str
-print(_format_time_friendly("2023-10-01T10:00:00+05:30"))
+print(_format_time_friendly("2023-10-01T10:00:00+05:30"))  #
