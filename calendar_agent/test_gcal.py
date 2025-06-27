@@ -1,25 +1,24 @@
-# test_gcal.py
-from gcal import check_availability, book_appointment
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
-# Test slots
-test_slots = {
-    "start": "2025-06-27T14:00:00",
-    "end": "2025-06-27T15:00:00",
-    "timezone": "Asia/Kolkata"
-}
+SCOPES = ['https://www.googleapis.com/auth/calendar']
+SERVICE_ACCOUNT_FILE = 'test.json'  # or use your env/secret method
+CALENDAR_ID = 'primary'  # or your calendar ID
 
-if __name__ == "__main__":
-    print("=== Testing Calendar API Integration ===")
-    
-    # Test availability check
-    print("\n[1] Testing availability check...")
-    available = check_availability(test_slots)
-    print(f"Available: {available}")
-    
-    # Test booking (only if available)
-    if available:
-        print("\n[2] Testing appointment booking...")
-        booked = book_appointment(test_slots)
-        print(f"Booking success: {booked}")
-    else:
-        print("\n[2] Skipping booking test - slot not available")
+creds = service_account.Credentials.from_service_account_file(
+    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+service = build('calendar', 'v3', credentials=creds)
+
+events_result = service.events().list(
+    calendarId=CALENDAR_ID,
+    maxResults=5,
+    singleEvents=True,
+    orderBy='startTime'
+).execute()
+
+events = events_result.get('items', [])
+if not events:
+    print('No upcoming events found.')
+for event in events:
+    start = event['start'].get('dateTime', event['start'].get('date'))
+    print(start, event['summary'])

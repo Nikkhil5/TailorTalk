@@ -1,6 +1,4 @@
 import streamlit as st
-import base64
-import json
 import logging
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -14,31 +12,31 @@ logger.setLevel(logging.INFO)
 
 def get_service_and_calendar_id():
     """
-    Authenticate with Google Calendar API using credentials from Streamlit secrets.
+    Authenticate using credentials from Streamlit secrets.
     Returns:
         service: Google Calendar API service object
         calendar_id: The calendar ID to use for API calls
     """
     try:
-        base64_creds = st.secrets["GOOGLE_CREDENTIALS_BASE64"]
-        calendar_id = st.secrets["CALENDAR_ID"]
-        json_str = base64.b64decode(base64_creds).decode('utf-8')
-        service_account_info = json.loads(json_str)
+        # Get credentials from secrets.toml
+        credentials_info = dict(st.secrets["google_credentials"])
+        calendar_id = st.secrets.get("CALENDAR_ID", "primary")
+        
         creds = service_account.Credentials.from_service_account_info(
-            service_account_info,
+            credentials_info,
             scopes=['https://www.googleapis.com/auth/calendar']
         )
         service = build('calendar', 'v3', credentials=creds)
         return service, calendar_id
     except Exception as e:
-        logger.error(f"Service authentication failed: {str(e)}")
+        logger.error(f"Credential loading failed: {str(e)}")
         raise
 
-# In gcal.py, ensure proper timezone handling
 def check_availability(slots: dict) -> bool:
-    """Check availability with proper timezone handling"""
+    """Check availability using Google Calendar FreeBusy API"""
     logger.info(f"Checking availability: {slots}")
     
+    # Validate slots
     if not slots or 'start' not in slots or 'end' not in slots:
         logger.error("Invalid slots format")
         return False
@@ -46,61 +44,72 @@ def check_availability(slots: dict) -> bool:
     try:
         service, calendar_id = get_service_and_calendar_id()
         
-        # Parse datetime with timezone awareness
+        # Convert to datetime objects
         start_dt = datetime.fromisoformat(slots['start'])
         end_dt = datetime.fromisoformat(slots['end'])
         
-        # Convert to UTC for API call, but preserve timezone info
+        # Handle timezones
         if start_dt.tzinfo is None:
             user_tz = pytz.timezone(slots.get('timezone', 'Asia/Kolkata'))
             start_dt = user_tz.localize(start_dt)
             end_dt = user_tz.localize(end_dt)
         
+        # Convert to UTC
         start_utc = start_dt.astimezone(pytz.UTC).isoformat()
         end_utc = end_dt.astimezone(pytz.UTC).isoformat()
         
+        # Prepare API request
         body = {
             "timeMin": start_utc,
             "timeMax": end_utc,
             "items": [{"id": calendar_id}]
         }
         
+        # Execute request
         response = service.freebusy().query(body=body).execute()
         busy_times = response['calendars'][calendar_id].get('busy', [])
         
         return len(busy_times) == 0
+    except HttpError as e:
+        logger.error(f"Google API error: {e}")
     except Exception as e:
         logger.error(f"Availability check failed: {str(e)}")
-        return False
-
+    
+    return False
 
 def book_appointment(slots: dict) -> bool:
-    """
-    Create an event in Google Calendar.
-    Args:
-        slots: dict with 'start', 'end', and optionally 'timezone'
-    Returns:
-        True if booking was successful, False otherwise.
-    """
+    """Create calendar event"""
     logger.info(f"Booking appointment: {slots}")
-
+    
+    # Validate slots
     if not slots or 'start' not in slots or 'end' not in slots:
         logger.error("Invalid slots for booking")
         return False
-
+    
     try:
+        # Get service and calendar ID
         service, calendar_id = get_service_and_calendar_id()
-        print(f" {calendar_id} Service and calendar ID obtained successfully")
+        
+        # Prepare event with timezone
+        timezone = slots.get('timezone', 'UTC')
         event = {
             'summary': 'Booked Appointment',
-            'start': {'dateTime': slots['start'], 'timeZone': 'UTC'},
-            'end': {'dateTime': slots['end'], 'timeZone': 'UTC'}
+            'start': {
+                'dateTime': slots['start'],
+                'timeZone': timezone
+            },
+            'end': {
+                'dateTime': slots['end'],
+                'timeZone': timezone
+            }
         }
+        
+        # Execute booking
         service.events().insert(calendarId=calendar_id, body=event).execute()
-        logger.info("Event booked successfully.")
         return True
     except HttpError as e:
         logger.error(f"Booking API error: {e}")
     except Exception as e:
         logger.error(f"Booking failed: {str(e)}")
+    
     return False

@@ -12,10 +12,16 @@ def get_user_intent(text: str) -> str:
     return "unknown"
 
 def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
-    """Robust slot extraction that handles formats like 'Friday 3PM'"""
+    """Robust slot extraction that handles conversational inputs"""
     user_tz = pytz.timezone(timezone)
-    original_text = text
     text_lower = text.lower().strip()
+    
+    # Remove common conversational phrases
+    clean_text = re.sub(r'\b(?:yes|please|book|schedule|appointment|meeting|call|wanna|want to)\b', 
+                        '', text_lower, flags=re.IGNORECASE)
+    clean_text = clean_text.strip()
+    
+    print(f"[DEBUG] Cleaned text: '{clean_text}'")
 
     # Map vague terms to business hours
     time_map = {
@@ -26,30 +32,23 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
         "noon": "12:00 PM",
         "midnight": "12:00 AM"
     }
-    
-    # Apply time mapping
     for term, tm in time_map.items():
-        if term in text_lower:
-            text = re.sub(term, tm, text, flags=re.IGNORECASE)
-            text_lower = text.lower()
+        if term in clean_text:
+            clean_text = re.sub(term, tm, clean_text, flags=re.IGNORECASE)
             break
-    
+
     # Handle time formats like "3PM" -> "3 PM"
-    text = re.sub(r'(\d+)([ap]m)', r'\1 \2', text, flags=re.IGNORECASE)
-    
-    # Ensure space between day and time (Friday3PM -> Friday 3PM)
-    text = re.sub(r'([a-z]+)(\d)', r'\1 \2', text, flags=re.IGNORECASE)
+    clean_text = re.sub(r'(\d+)([ap]m)', r'\1 \2', clean_text, flags=re.IGNORECASE)
     
     # Add default time if missing
-    if not any(marker in text_lower for marker in ["am", "pm", ":", "hour", "minute"]):
-        if any(day in text_lower for day in ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]):
-            text += " 10:00 AM"
+    if not any(marker in clean_text for marker in ["am", "pm", ":", "hour", "minute"]):
+        if any(day in clean_text for day in ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]):
+            clean_text += " 10:00 AM"
 
-    # Debug output
-    print(f"[DEBUG] Parsing: '{original_text}' -> '{text}'")
+    print(f"[DEBUG] Final parsing text: '{clean_text}'")
     
     parsed = dateparser.parse(
-        text,
+        clean_text,
         settings={
             "TIMEZONE": timezone,
             "RETURN_AS_TIMEZONE_AWARE": True,
@@ -58,14 +57,14 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     )
     
     if not parsed:
-        print(f"[ERROR] Failed to parse: '{text}'")
+        print(f"[ERROR] Failed to parse: '{clean_text}'")
         return None
 
     # Duration handling
     duration = 30
-    if "hour" in text_lower:
+    if "hour" in clean_text:
         duration = 60
-    minutes_match = re.search(r"(\d+)\s*minute", text_lower)
+    minutes_match = re.search(r"(\d+)\s*minute", clean_text)
     if minutes_match:
         duration = int(minutes_match.group(1))
 
@@ -82,7 +81,6 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
         "end": end.isoformat(),
         "timezone": timezone
     }
-
 def suggest_alternative(slots: dict) -> str:
     try:
         start_dt = datetime.fromisoformat(slots["start"])
