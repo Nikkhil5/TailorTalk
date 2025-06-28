@@ -98,7 +98,13 @@ def _handle_confirmation(state: AgentState) -> AgentState:
         state["waiting_for"] = "time_range"
 
     else:
-        state["response"] = "Please confirm with 'yes' or 'no'. " + state["context"].get("confirmation_prompt", "")
+        possible_slots = extract_slots(state["user_input"])
+    if possible_slots:
+        state["waiting_for"] = "time_range"
+        return _process_slots(state, possible_slots)
+
+    state["response"] = "Please confirm with 'yes' or 'no'. " + state["context"].get("confirmation_prompt", "")
+
 
     return state
 
