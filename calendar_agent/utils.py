@@ -2,7 +2,6 @@ import re
 import dateparser
 from datetime import datetime, timedelta
 import pytz
-from gcal import check_availability
 
 def get_user_intent(text: str) -> str:
     text = text.lower()
@@ -17,14 +16,26 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     original_text = text
     text_lower = text.lower().strip()
 
+    # Step 1: Clean text while preserving structure
     clean_text = re.sub(
         r'\b(?:yes|please|book|schedule|appointment|meeting|call|wanna|want to|can you|for)\b',
         '', text_lower, flags=re.IGNORECASE
-    ).strip()
-
-    clean_text = re.sub(r'\b(at|on|by)\b', ' ', clean_text)
+    )
+    clean_text = clean_text.strip()
+    clean_text = re.sub(r'\b(at|on|by)\b', ' ', clean_text)  # Remove unnecessary prepositions
     clean_text = re.sub(r'\s+', ' ', clean_text)
 
+    # Step 2: Add fallback for month/day-only inputs (like "15 July")
+    month_day_match = re.search(r'\b(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)\b', clean_text)
+    if month_day_match and "next" in clean_text:
+        next_month = datetime.now(user_tz).month + 1
+        current_year = datetime.now(user_tz).year
+        if next_month > 12:
+            next_month = 1
+            current_year += 1
+        clean_text += f" {current_year}"
+
+    # Step 3: Map vague terms to specific times
     time_map = {
         "morning": "10:00 AM",
         "afternoon": "2:00 PM",
@@ -41,12 +52,14 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     clean_text = re.sub(r'(\d+)([ap]m)', r'\1 \2', clean_text, flags=re.IGNORECASE)
     clean_text = re.sub(r'(\d{1,2})[:]?(\d{2})', r'\1:\2', clean_text)
 
-    if not any(word in clean_text for word in ["mon","tue","wed","thu","fri","sat","sun","today","tomorrow","week","month"]):
+    # Step 4: Handle ambiguous inputs
+    if not any(word in clean_text for word in ["mon", "tue", "wed", "thu", "fri", "sat", "sun", "today", "tomorrow", "week", "month", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]):
         if re.search(r'\d{1,2}:\d{2}\s*(am|pm)', clean_text, re.IGNORECASE):
             clean_text = "today " + clean_text
     elif not any(marker in clean_text for marker in ["am", "pm", ":", "hour", "minute"]):
         clean_text += " 10:00 AM"
 
+    # Step 5: Multiple parse attempts
     parsed = None
     parse_attempts = [
         clean_text,
@@ -74,6 +87,7 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
         print(f"[ERROR] Failed to parse: '{original_text}' → Attempts: {parse_attempts}")
         return None
 
+    # Step 6: Duration
     duration = 30
     if "hour" in clean_text:
         hour_match = re.search(r'(\d+)\s*hour', clean_text)
@@ -82,6 +96,7 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     if minutes_match:
         duration = int(minutes_match.group(1))
 
+    # Step 7: Timezone handling
     if parsed.tzinfo is None:
         start = user_tz.localize(parsed)
     else:
@@ -104,35 +119,21 @@ def is_business_hours(slots: dict) -> bool:
     except:
         return True
 
-def suggest_alternative(slots: dict, only_free=False) -> str:
+def suggest_alternative(slots: dict) -> str:
     try:
         start_dt = datetime.fromisoformat(slots["start"])
-        user_tz = start_dt.tzinfo or pytz.timezone("Asia/Kolkata")
-        suggestions = []
+        business_start = 9
+        business_end = 18
 
-        base_day = start_dt.replace(minute=0, second=0, microsecond=0)
+        if start_dt.hour < business_start or start_dt.hour >= business_end:
+            next_day = start_dt + timedelta(days=1)
+            return f"{next_day.strftime('%A')} morning or afternoon"
 
-        for hour in range(9, 18):
-            alt_time = base_day.replace(hour=hour)
-            alt_end = alt_time + timedelta(minutes=30)
-            alt_slot = {
-                "start": alt_time.isoformat(),
-                "end": alt_end.isoformat(),
-                "timezone": slots.get("timezone", "Asia/Kolkata")
-            }
-            if only_free and not check_availability(alt_slot):
-                continue
-            suggestions.append(alt_time.strftime("%I:%M %p"))
-            if len(suggestions) == 2:
-                break
-
-        if suggestions:
-            return f"{suggestions[0]} or {suggestions[1]}"
-        return "10:00 AM or 2:00 PM tomorrow"
-
-    except Exception as e:
-        print("[suggest_alternative] error:", e)
-        return "10:00 AM or 2:00 PM tomorrow"
+        alt1 = start_dt + timedelta(hours=1)
+        alt2 = start_dt + timedelta(hours=2)
+        return f"{alt1.strftime('%I:%M %p')} or {alt2.strftime('%I:%M %p')}"
+    except Exception:
+        return "tomorrow morning or afternoon"
 
 def _format_time_friendly(datetime_str: str) -> str:
     try:
@@ -143,8 +144,5 @@ def _format_time_friendly(datetime_str: str) -> str:
         elif dt.date() == now.date() + timedelta(days=1):
             return f"tomorrow at {dt.strftime('%I:%M %p')}"
         return dt.strftime("%A, %B %d at %I:%M %p")
-    
     except Exception:
-
-
         return datetime_str
