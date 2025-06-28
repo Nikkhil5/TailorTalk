@@ -1,281 +1,147 @@
-from typing import TypedDict
-from langgraph.graph import StateGraph, END
-from gcal import check_availability, book_appointment
-from utils import (
-    get_user_intent,
-    extract_slots,
-    suggest_alternative,
-    _format_time_friendly,
-    is_business_hours
-)
-
 import re
-import datetime
+import dateparser
+from datetime import datetime, timedelta
+import pytz
 
-class AgentState(TypedDict):
-    user_input: str
-    intent: str
-    slots: dict
-    response: str
-    completed: bool
-    context: dict
-    waiting_for: str
-    last_booked: dict
-    conversation_history: list
-    pending_date: str
-    last_suggested_alternatives: list
+def get_user_intent(text: str) -> str:
+    text = text.lower()
+    if any(word in text for word in ["book", "schedule", "appointment", "meeting", "reserve"]):
+        return "book"
+    if any(word in text for word in ["free", "available", "availability", "open"]):
+        return "check_availability"
+    return "unknown"
 
-def recognize_intent(state: AgentState) -> AgentState:
-    if state.get("completed"):
-        return state
+def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
+    user_tz = pytz.timezone(timezone)
+    original_text = text
+    text_lower = text.lower().strip()
 
-    conversation_context = " ".join(state.get("conversation_history", []))
-    full_context = f"{conversation_context} {state['user_input']}".lower()
-
-    if "same time" in full_context and state.get("last_booked"):
-        state["context"]["reference_slot"] = state["last_booked"]
-        state["intent"] = "book"
-        return state
-
-    if re.search(r'\b(book|schedule|appointment|meeting)\b', full_context):
-        state["intent"] = "book"
-    elif re.search(r'\b(free|available|availability|open)\b', full_context):
-        state["intent"] = "check_availability"
-    else:
-        if any(word in full_context for word in ["tomorrow", "monday", "tuesday", "wednesday",
-                                                 "thursday", "friday", "saturday", "sunday"]):
-            state["intent"] = "check_availability"
-        else:
-            state["intent"] = get_user_intent(state["user_input"])
-
-    return state
-
-def handle_booking(state: AgentState) -> AgentState:
-    state.setdefault("context", {})
-    state.setdefault("conversation_history", [])
-    state["conversation_history"].append(state["user_input"])
-
-    if re.search(r'\b(start over|reset|begin again)\b', state["user_input"].lower()):
-        _reset_state(state)
-        state["response"] = "Okay, let's start fresh. How can I help?"
-        return state
-
-    if re.search(r'\b(cancel|stop|never mind)\b', state["user_input"].lower()):
-        _reset_state(state)
-        state["response"] = "Booking canceled. What would you like to do next?"
-        return state
-
-    try:
-        if state.get("waiting_for") == "confirmation":
-            return _handle_confirmation(state)
-        if state.get("waiting_for") == "time_range":
-            return _handle_time_range(state)
-
-        if state["intent"] == "check_availability":
-            return _handle_availability(state)
-        if state["intent"] == "book":
-            return _handle_booking_request(state)
-
-        return _handle_unknown_intent(state)
-
-    except Exception as e:
-        return _handle_error(state, e)
-
-def _handle_confirmation(state: AgentState) -> AgentState:
-    user_input = state["user_input"].strip().lower()
-
-    if user_input in ["yes", "y", "yeah", "sure", "ok", "confirm"]:
-        if book_appointment(state["context"]["pending_booking"]):
-            booked_time = _format_time_friendly(state["context"]["pending_booking"]["start"])
-            state["response"] = f"✅ Booked! Your meeting is scheduled for {booked_time}.\n\nWould you like to book something else?"
-            state["last_booked"] = state["context"]["pending_booking"]
-            _reset_state(state)
-        else:
-            state["response"] = "⚠️ Booking failed. Please try a different time."
-            state["waiting_for"] = "time_range"
-    elif user_input in ["no", "n", "nope", "cancel"]:
-        state["response"] = "Okay, let's try another time. What would you prefer?"
-        state["waiting_for"] = "time_range"
-    else:
-        possible_slots = extract_slots(state["user_input"])
-        if possible_slots:
-            state["waiting_for"] = "time_range"
-            return _process_slots(state, possible_slots)
-
-        state["response"] = (
-            "Please confirm with 'yes' or 'no'.\n"
-            "Or you can enter a new time (e.g., '2 July at 2 PM').\n\n"
-            + state["context"].get("confirmation_prompt", "")
-        )
-
-    return state
-
-def _handle_time_range(state: AgentState) -> AgentState:
-    if state.get("last_suggested_alternatives"):
-        user_input_clean = re.sub(r'[\s:-]', '', state["user_input"].lower())
-        for alt in state["last_suggested_alternatives"]:
-            alt_clean = re.sub(r'[\s:-]', '', alt.lower())
-            if user_input_clean == alt_clean or user_input_clean in alt_clean:
-                slots = extract_slots(alt)
-                if slots:
-                    return _process_slots(state, slots)
-
-    if "same time" in state["user_input"].lower() and state.get("last_booked"):
-        slots = state["last_booked"].copy()
-        if "tomorrow" in state["user_input"].lower():
-            new_date = datetime.datetime.now() + datetime.timedelta(days=1)
-            slots["start"] = slots["start"].replace(day=new_date.day, month=new_date.month, year=new_date.year)
-        return _process_slots(state, slots)
-
-    combined_input = state["user_input"]
-    if state.get("pending_date"):
-        combined_input = f"{state['pending_date']} {state['user_input']}"
-        state["pending_date"] = None
-
-    slots = extract_slots(combined_input)
-
-    if not slots:
-        for msg in reversed(state.get("conversation_history", [])):
-            if "next" in msg.lower() or "week" in msg.lower() or "friday" in msg.lower():
-                retry_input = f"{msg} {state['user_input']}"
-                slots = extract_slots(retry_input)
-                if slots:
-                    break
-
-    if not slots:
-        state["response"] = (
-            "I couldn’t understand that time. Please try one of these:\n"
-            "• 'Tomorrow at 2 PM'\n"
-            "• 'Friday 11 AM'\n"
-            "• 'Next week Tuesday at 3:30 PM'"
-        )
-        return state
-
-    return _process_slots(state, slots)
-
-def _handle_availability(state: AgentState) -> AgentState:
-    if "tomorrow" in state["user_input"].lower() and not re.search(r'\d', state["user_input"]):
-        state["context"]["date"] = "tomorrow"
-        state["waiting_for"] = "time_range"
-        state["response"] = "What time tomorrow? (e.g., 'morning', 'afternoon' or '2 PM')"
-        return state
-
-    slots = extract_slots(state["user_input"])
-    return _process_slots(state, slots) if slots else _request_better_input(state)
-
-def _handle_booking_request(state: AgentState) -> AgentState:
-    if "same time" in state["user_input"].lower() and state.get("last_booked"):
-        return _process_slots(state, state["last_booked"].copy())
-
-    slots = extract_slots(state["user_input"])
-
-    if not slots:
-        prior_date = next((msg for msg in reversed(state["conversation_history"])
-                          if any(d in msg.lower() for d in ["monday", "tuesday", "friday", "next week", "tomorrow"])), "")
-        if prior_date:
-            slots = extract_slots(f"{prior_date} {state['user_input']}")
-
-    return _process_slots(state, slots) if slots else _request_better_input(state)
-
-def _process_slots(state: AgentState, slots: dict) -> AgentState:
-    print("[DEBUG] Booking slots:", slots)
-
-    if not is_business_hours(slots):
-        alt = suggest_alternative(slots)
-        state["response"] = f"⏰ That time is outside business hours. How about {alt}?"
-        state["waiting_for"] = "time_range"
-        state["last_suggested_alternatives"] = [alt]
-        return state
-
-    if check_availability(slots):
-        state["context"]["pending_booking"] = slots
-        state["waiting_for"] = "confirmation"
-        friendly = _format_time_friendly(slots["start"])
-        state["response"] = f"You're free on {friendly}. Book it? (yes/no)"
-        state["context"]["confirmation_prompt"] = state["response"]
-    else:
-        alt = suggest_alternative(slots)
-        state["waiting_for"] = "time_range"
-        state["response"] = f"⏰ Unavailable at that time. How about {alt}?"
-        state["last_suggested_alternatives"] = [alt]
-
-    return state
-
-def _request_better_input(state: AgentState) -> AgentState:
-    state["response"] = (
-        "I couldn’t understand the time clearly.\n\n**Try one of these:**\n"
-        "• 'Tomorrow at 2 PM'\n"
-        "• 'Friday 11 AM'\n"
-        "• 'Next week Tuesday at 3:30 PM'"
+    # Step 1: Clean text while preserving structure
+    clean_text = re.sub(
+        r'\b(?:yes|please|book|schedule|appointment|meeting|call|wanna|want to|can you|for)\b',
+        '', text_lower, flags=re.IGNORECASE
     )
-    return state
+    clean_text = clean_text.strip()
+    clean_text = re.sub(r'\b(at|on|by)\b', ' ', clean_text)  # Remove unnecessary prepositions
+    clean_text = re.sub(r'\s+', ' ', clean_text)
 
-def _handle_unknown_intent(state: AgentState) -> AgentState:
-    if state["conversation_history"] and "book" in state["conversation_history"][-1].lower():
-        state["response"] = "When would you like to book? (e.g., 'Tomorrow 3PM')"
-        state["waiting_for"] = "time_range"
-    elif state["conversation_history"] and "available" in state["conversation_history"][-1].lower():
-        state["response"] = "When should I check? (e.g., 'Friday afternoon')"
-        state["waiting_for"] = "time_range"
-    else:
-        state["response"] = (
-            "I can help with:\n"
-            "🔹 Booking appointments\n"
-            "🔹 Checking availability\n\n"
-            "**Try something like**:\n"
-            "- 'Book a meeting tomorrow at 2 PM'\n"
-            "- 'What's free next week?'\n"
-            "- 'Check my Friday availability'"
-        )
-    state["completed"] = True
-    return state
+    # Step 2: Add fallback for month/day-only inputs (like "15 July")
+    month_day_match = re.search(r'\b(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)\b', clean_text)
+    if month_day_match and "next" in clean_text:
+        next_month = datetime.now(user_tz).month + 1
+        current_year = datetime.now(user_tz).year
+        if next_month > 12:
+            next_month = 1
+            current_year += 1
+        clean_text += f" {current_year}"
 
-def _handle_error(state: AgentState, error: Exception) -> AgentState:
-    state["response"] = (
-        "⚠️ I encountered an issue: " + str(error) + "\n\n"
-        "Let's try again! Please rephrase your request."
-    )
-    _reset_state(state)
-    return state
-
-def _reset_state(state: AgentState) -> None:
-    state.update({
-        "completed": True,
-        "waiting_for": "",
-        "context": {},
-        "pending_date": None,
-        "last_suggested_alternatives": []
-    })
-
-workflow = StateGraph(AgentState)
-workflow.add_node("recognize_intent_node", recognize_intent)
-workflow.add_node("handle_booking_node", handle_booking)
-workflow.set_entry_point("recognize_intent_node")
-workflow.add_edge("recognize_intent_node", "handle_booking_node")
-workflow.add_edge("handle_booking_node", END)
-graph = workflow.compile()
-
-def run_agent(user_input: str, state: dict) -> dict:
-    if not state or state.get("completed"):
-        state = {
-            "user_input": user_input,
-            "intent": "",
-            "slots": {},
-            "response": "",
-            "completed": False,
-            "context": {},
-            "waiting_for": "",
-            "last_booked": None,
-            "conversation_history": [],
-            "pending_date": None,
-            "last_suggested_alternatives": []
-        }
-    else:
-        state["user_input"] = user_input
-        state["completed"] = False
-
-    updated_state = graph.invoke(state)
-    return {
-        "response": updated_state["response"],
-        "state": updated_state
+    # Step 3: Map vague terms to specific times
+    time_map = {
+        "morning": "10:00 AM",
+        "afternoon": "2:00 PM",
+        "evening": "5:00 PM",
+        "night": "7:00 PM",
+        "noon": "12:00 PM",
+        "midnight": "12:00 AM"
     }
+    for term, tm in time_map.items():
+        if term in clean_text:
+            clean_text = re.sub(term, tm, clean_text, flags=re.IGNORECASE)
+            break
+
+    clean_text = re.sub(r'(\d+)([ap]m)', r'\1 \2', clean_text, flags=re.IGNORECASE)
+    clean_text = re.sub(r'(\d{1,2})[:]?(\d{2})', r'\1:\2', clean_text)
+
+    # Step 4: Handle ambiguous inputs
+    # Add default time if only date is mentioned
+    if not any(t in clean_text for t in ["am", "pm", ":", "hour", "minute"]):
+        clean_text = clean_text.strip() + " at 10:00 AM"
+
+
+    # Step 5: Multiple parse attempts
+    parsed = None
+    parse_attempts = [
+        clean_text,
+        f"{clean_text} {datetime.now().year}",
+        original_text
+    ]
+
+    for attempt in parse_attempts:
+        parsed = dateparser.parse(
+            attempt,
+            settings={
+                "TIMEZONE": timezone,
+                "RETURN_AS_TIMEZONE_AWARE": True,
+                "PREFER_DATES_FROM": "future",
+                "PREFER_DAY_OF_MONTH": "first",
+                "RELATIVE_BASE": datetime.now(pytz.timezone(timezone))
+            }
+        )
+        if parsed:
+            if parsed.year == 1900:
+                parsed = parsed.replace(year=datetime.now().year)
+            break
+
+    if not parsed:
+        print(f"[ERROR] Failed to parse: '{original_text}' → Attempts: {parse_attempts}")
+        return None
+
+    # Step 6: Duration
+    duration = 30
+    if "hour" in clean_text:
+        hour_match = re.search(r'(\d+)\s*hour', clean_text)
+        duration = 60 * int(hour_match.group(1)) if hour_match else 60
+    minutes_match = re.search(r"(\d+)\s*minute", clean_text)
+    if minutes_match:
+        duration = int(minutes_match.group(1))
+
+    # Step 7: Timezone handling
+    if parsed.tzinfo is None:
+        start = user_tz.localize(parsed)
+    else:
+        start = parsed.astimezone(user_tz)
+
+    end = start + timedelta(minutes=duration)
+
+    print(f"[SUCCESS] Parsed: '{original_text}' → {start.isoformat()}")
+
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "timezone": timezone
+    }
+
+def is_business_hours(slots: dict) -> bool:
+    try:
+        start_dt = datetime.fromisoformat(slots["start"])
+        return 9 <= start_dt.hour < 18
+    except:
+        return True
+
+def suggest_alternative(slots: dict) -> str:
+    try:
+        start_dt = datetime.fromisoformat(slots["start"])
+        business_start = 9
+        business_end = 18
+
+        if start_dt.hour < business_start or start_dt.hour >= business_end:
+            next_day = start_dt + timedelta(days=1)
+            return f"{next_day.strftime('%A')} morning or afternoon"
+
+        alt1 = start_dt + timedelta(hours=1)
+        alt2 = start_dt + timedelta(hours=2)
+        return f"{alt1.strftime('%I:%M %p')} or {alt2.strftime('%I:%M %p')}"
+    except Exception:
+        return "tomorrow morning or afternoon"
+
+def _format_time_friendly(datetime_str: str) -> str:
+    try:
+        dt = datetime.fromisoformat(datetime_str)
+        now = datetime.now()
+        if dt.date() == now.date():
+            return f"today at {dt.strftime('%I:%M %p')}"
+        elif dt.date() == now.date() + timedelta(days=1):
+            return f"tomorrow at {dt.strftime('%I:%M %p')}"
+        return dt.strftime("%A, %B %d at %I:%M %p")
+    except Exception:
+        return datetime_str

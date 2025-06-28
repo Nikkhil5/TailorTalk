@@ -10,7 +10,6 @@ from utils import (
 )
 import re
 import datetime
-from datetime import timedelta
 
 class AgentState(TypedDict):
     user_input: str
@@ -93,22 +92,40 @@ def _handle_confirmation(state: AgentState) -> AgentState:
         else:
             state["response"] = "⚠️ Booking failed. Please try a different time."
             state["waiting_for"] = "time_range"
-
     elif user_input in ["no", "n", "nope", "cancel"]:
         state["response"] = "Okay, let's try another time. What would you prefer?"
         state["waiting_for"] = "time_range"
-
     else:
         possible_slots = extract_slots(state["user_input"])
         if possible_slots:
             state["waiting_for"] = "time_range"
             return _process_slots(state, possible_slots)
 
-        state["response"] = "Please confirm with 'yes' or 'no'. " + state["context"].get("confirmation_prompt", "")
+        state["response"] = (
+            "Please confirm with 'yes' or 'no'.\n"
+            "Or you can enter a new time (e.g., '2 July at 2 PM').\n\n"
+            + state["context"].get("confirmation_prompt", "")
+        )
 
     return state
 
 def _handle_time_range(state: AgentState) -> AgentState:
+    if state.get("last_suggested_alternatives"):
+        user_input_clean = re.sub(r'[\s:-]', '', state["user_input"].lower())
+        for alt in state["last_suggested_alternatives"]:
+            alt_clean = re.sub(r'[\s:-]', '', alt.lower())
+            if user_input_clean == alt_clean or user_input_clean in alt_clean:
+                slots = extract_slots(alt)
+                if slots:
+                    return _process_slots(state, slots)
+
+    if "same time" in state["user_input"].lower() and state.get("last_booked"):
+        slots = state["last_booked"].copy()
+        if "tomorrow" in state["user_input"].lower():
+            new_date = datetime.datetime.now() + datetime.timedelta(days=1)
+            slots["start"] = slots["start"].replace(day=new_date.day, month=new_date.month, year=new_date.year)
+        return _process_slots(state, slots)
+
     combined_input = state["user_input"]
     if state.get("pending_date"):
         combined_input = f"{state['pending_date']} {state['user_input']}"
@@ -146,6 +163,9 @@ def _handle_availability(state: AgentState) -> AgentState:
     return _process_slots(state, slots) if slots else _request_better_input(state)
 
 def _handle_booking_request(state: AgentState) -> AgentState:
+    if "same time" in state["user_input"].lower() and state.get("last_booked"):
+        return _process_slots(state, state["last_booked"].copy())
+
     slots = extract_slots(state["user_input"])
 
     if not slots:
@@ -160,8 +180,8 @@ def _process_slots(state: AgentState, slots: dict) -> AgentState:
     print("[DEBUG] Booking slots:", slots)
 
     if not is_business_hours(slots):
-        alt = suggest_alternative(slots, only_free=True)
-        state["response"] = f"⏰ That time is outside business hours. Try: {alt}"
+        alt = suggest_alternative(slots)
+        state["response"] = f"⏰ That time is outside business hours. How about {alt}?"
         state["waiting_for"] = "time_range"
         state["last_suggested_alternatives"] = [alt]
         return state
@@ -173,9 +193,9 @@ def _process_slots(state: AgentState, slots: dict) -> AgentState:
         state["response"] = f"You're free on {friendly}. Book it? (yes/no)"
         state["context"]["confirmation_prompt"] = state["response"]
     else:
-        alt = suggest_alternative(slots, only_free=True)
+        alt = suggest_alternative(slots)
         state["waiting_for"] = "time_range"
-        state["response"] = f"⏰ Unavailable at that time. Try: {alt}"
+        state["response"] = f"⏰ Unavailable at that time. How about {alt}?"
         state["last_suggested_alternatives"] = [alt]
 
     return state
