@@ -27,7 +27,6 @@ Edit
 
 ## 🛠 Getting Started
 
-```bash
 git clone YOUR_GITHUB_REPO_URL_HERE
 cd calendar-booking-agent
 pip install -r requirements.txt
@@ -54,8 +53,6 @@ Made with ❤️ by [Your Name]
 yaml
 Copy
 Edit
-
----
 
 ### ✅ After Pasting:
 - Save this as `README.md` in your repo
