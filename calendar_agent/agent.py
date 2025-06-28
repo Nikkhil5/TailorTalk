@@ -98,25 +98,32 @@ def _handle_confirmation(state: AgentState) -> AgentState:
         state["waiting_for"] = "time_range"
 
     else:
-        slots = extract_slots(user_input)
-        if slots:
-            return _process_slots(state, slots)
+        possible_slots = extract_slots(state["user_input"])
+        if possible_slots:
+            if state.get("pending_date"):
+                combined = f"{state['pending_date']} {state['user_input']}"
+                possible_slots = extract_slots(combined) or possible_slots
+            state["waiting_for"] = "time_range"
+            return _process_slots(state, possible_slots)
+
         state["response"] = "Please confirm with 'yes' or 'no'. " + state["context"].get("confirmation_prompt", "")
 
     return state
 
 def _handle_time_range(state: AgentState) -> AgentState:
-    input_text = state["user_input"].lower().strip()
+    if state.get("last_suggested_alternatives"):
+        user_input_clean = re.sub(r'[\s:-]', '', state["user_input"].lower())
+        for alt in state["last_suggested_alternatives"]:
+            alt_clean = re.sub(r'[\s:-]', '', alt.lower())
+            if user_input_clean == alt_clean or user_input_clean in alt_clean:
+                slot_input = f"{state.get('pending_date', '')} {alt}".strip()
+                slots = extract_slots(slot_input)
+                if slots:
+                    return _process_slots(state, slots)
 
-    for alt in state.get("last_suggested_alternatives", []):
-        if input_text in alt.lower() or alt.lower() in input_text:
-            slots = extract_slots(alt)
-            if slots:
-                return _process_slots(state, slots)
-
-    if "same time" in input_text and state.get("last_booked"):
+    if "same time" in state["user_input"].lower() and state.get("last_booked"):
         slots = state["last_booked"].copy()
-        if "tomorrow" in input_text:
+        if "tomorrow" in state["user_input"].lower():
             new_date = datetime.datetime.now() + datetime.timedelta(days=1)
             slots["start"] = slots["start"].replace(day=new_date.day, month=new_date.month, year=new_date.year)
         return _process_slots(state, slots)
@@ -127,10 +134,9 @@ def _handle_time_range(state: AgentState) -> AgentState:
         state["pending_date"] = None
 
     slots = extract_slots(combined_input)
-
     if not slots:
         for msg in reversed(state.get("conversation_history", [])):
-            if any(k in msg.lower() for k in ["next", "week", "friday", "monday"]):
+            if any(day in msg.lower() for day in ["next", "week", "friday", "july"]):
                 retry_input = f"{msg} {state['user_input']}"
                 slots = extract_slots(retry_input)
                 if slots:
@@ -162,7 +168,6 @@ def _handle_booking_request(state: AgentState) -> AgentState:
         return _process_slots(state, state["last_booked"].copy())
 
     slots = extract_slots(state["user_input"])
-
     if not slots:
         prior_date = next((msg for msg in reversed(state["conversation_history"])
                           if any(d in msg.lower() for d in ["monday", "tuesday", "friday", "next week", "tomorrow"])), "")
@@ -187,6 +192,10 @@ def _process_slots(state: AgentState, slots: dict) -> AgentState:
         friendly = _format_time_friendly(slots["start"])
         state["response"] = f"You're free on {friendly}. Book it? (yes/no)"
         state["context"]["confirmation_prompt"] = state["response"]
+
+        # ✅ Save the weekday for future reference
+        parsed_date = datetime.datetime.fromisoformat(slots["start"])
+        state["pending_date"] = parsed_date.strftime("%A")
     else:
         alt = suggest_alternative(slots)
         state["waiting_for"] = "time_range"
@@ -273,4 +282,3 @@ def run_agent(user_input: str, state: dict) -> dict:
         "response": updated_state["response"],
         "state": updated_state
     }
-print("Agent workflow initialized successfully.")
