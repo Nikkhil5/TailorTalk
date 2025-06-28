@@ -2,6 +2,7 @@ import re
 import dateparser
 from datetime import datetime, timedelta
 import pytz
+from gcal import check_availability
 
 def get_user_intent(text: str) -> str:
     text = text.lower()
@@ -116,24 +117,34 @@ def is_business_hours(slots: dict) -> bool:
         return 9 <= start_dt.hour < 18
     except:
         return True
-
 def suggest_alternative(slots: dict) -> str:
-    """Suggest business-appropriate alternatives with clean formatting"""
+    """Suggest actual available alternatives by checking calendar."""
     try:
         start_dt = datetime.fromisoformat(slots["start"])
-        business_start = 9
-        business_end = 18
+        timezone = slots.get("timezone", "Asia/Kolkata")
+        user_tz = pytz.timezone(timezone)
+        suggestions = []
 
-        if start_dt.hour < business_start or start_dt.hour >= business_end:
-            next_day = start_dt + timedelta(days=1)
-            return f"{next_day.strftime('%A')} morning or afternoon"
+        for i in range(1, 5):  # Try next 4 half-hour blocks
+            new_start = start_dt + timedelta(minutes=30 * i)
+            new_end = new_start + timedelta(minutes=30)
+            new_slot = {
+                "start": new_start.isoformat(),
+                "end": new_end.isoformat(),
+                "timezone": timezone
+            }
+            if check_availability(new_slot):
+                suggestions.append(new_start.strftime("%I:%M %p"))
+            if len(suggestions) == 2:
+                break
 
-        alt1 = start_dt + timedelta(hours=1)
-        alt2 = start_dt + timedelta(hours=2)
-        return f"{alt1.strftime('%I:%M %p')} or {alt2.strftime('%I:%M %p')}"
-
-    except Exception:
-        return "tomorrow morning or afternoon"
+        if suggestions:
+            return " or ".join(suggestions)
+        else:
+            return "tomorrow at 10:00 AM or 2:00 PM"
+    except Exception as e:
+        print("[suggest_alternative] error:", e)
+        return "tomorrow at 10:00 AM or 2:00 PM"
 
 def _format_time_friendly(datetime_str: str) -> str:
     try:
