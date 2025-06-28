@@ -53,11 +53,10 @@ def extract_slots(text: str, timezone: str = "Asia/Kolkata") -> dict:
     clean_text = re.sub(r'(\d{1,2})[:]?(\d{2})', r'\1:\2', clean_text)
 
     # Step 4: Handle ambiguous inputs
-    if not any(word in clean_text for word in ["mon", "tue", "wed", "thu", "fri", "sat", "sun", "today", "tomorrow", "week", "month", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]):
-        if re.search(r'\d{1,2}:\d{2}\s*(am|pm)', clean_text, re.IGNORECASE):
-            clean_text = "today " + clean_text
-    elif not any(marker in clean_text for marker in ["am", "pm", ":", "hour", "minute"]):
-        clean_text += " 10:00 AM"
+    # Add default time if only date is mentioned
+    if not any(t in clean_text for t in ["am", "pm", ":", "hour", "minute"]):
+        clean_text = clean_text.strip() + " at 10:00 AM"
+
 
     # Step 5: Multiple parse attempts
     parsed = None
