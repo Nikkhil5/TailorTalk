@@ -98,28 +98,25 @@ def _handle_confirmation(state: AgentState) -> AgentState:
         state["waiting_for"] = "time_range"
 
     else:
-        possible_slots = extract_slots(state["user_input"])
-        if possible_slots:
-            state["waiting_for"] = "time_range"
-            return _process_slots(state, possible_slots)
-
+        slots = extract_slots(user_input)
+        if slots:
+            return _process_slots(state, slots)
         state["response"] = "Please confirm with 'yes' or 'no'. " + state["context"].get("confirmation_prompt", "")
 
     return state
 
 def _handle_time_range(state: AgentState) -> AgentState:
-    if state.get("last_suggested_alternatives"):
-        user_input_clean = re.sub(r'[\s:-]', '', state["user_input"].lower())
-        for alt in state["last_suggested_alternatives"]:
-            alt_clean = re.sub(r'[\s:-]', '', alt.lower())
-            if user_input_clean == alt_clean or user_input_clean in alt_clean:
-                slots = extract_slots(alt)
-                if slots:
-                    return _process_slots(state, slots)
+    input_text = state["user_input"].lower().strip()
 
-    if "same time" in state["user_input"].lower() and state.get("last_booked"):
+    for alt in state.get("last_suggested_alternatives", []):
+        if input_text in alt.lower() or alt.lower() in input_text:
+            slots = extract_slots(alt)
+            if slots:
+                return _process_slots(state, slots)
+
+    if "same time" in input_text and state.get("last_booked"):
         slots = state["last_booked"].copy()
-        if "tomorrow" in state["user_input"].lower():
+        if "tomorrow" in input_text:
             new_date = datetime.datetime.now() + datetime.timedelta(days=1)
             slots["start"] = slots["start"].replace(day=new_date.day, month=new_date.month, year=new_date.year)
         return _process_slots(state, slots)
@@ -133,7 +130,7 @@ def _handle_time_range(state: AgentState) -> AgentState:
 
     if not slots:
         for msg in reversed(state.get("conversation_history", [])):
-            if "next" in msg.lower() or "week" in msg.lower() or "friday" in msg.lower():
+            if any(k in msg.lower() for k in ["next", "week", "friday", "monday"]):
                 retry_input = f"{msg} {state['user_input']}"
                 slots = extract_slots(retry_input)
                 if slots:
@@ -276,3 +273,4 @@ def run_agent(user_input: str, state: dict) -> dict:
         "response": updated_state["response"],
         "state": updated_state
     }
+print("Agent workflow initialized successfully.")
